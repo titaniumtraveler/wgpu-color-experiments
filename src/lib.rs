@@ -41,39 +41,67 @@ impl Vertex {
     };
 }
 
-const VERTICES: &[Vertex] = &[
-    // A
-    Vertex {
-        position: [-0.0868241, 0.49240386, 0.0],
-        color: [0.5, 0.0, 0.5],
-    },
-    // B
-    Vertex {
-        position: [-0.49513406, 0.06958647, 0.0],
-        color: [0.5, 0.0, 0.5],
-    },
-    // C
-    Vertex {
-        position: [-0.21918549, -0.44939706, 0.0],
-        color: [0.5, 0.0, 0.5],
-    },
-    // D
-    Vertex {
-        position: [0.35966998, -0.3473291, 0.0],
-        color: [0.5, 0.0, 0.5],
-    },
-    // E
-    Vertex {
-        position: [0.44147372, 0.2347359, 0.0],
-        color: [0.5, 0.0, 0.5],
-    },
-];
+#[derive(Debug, Clone, Copy)]
+struct Polygon<const SIDES: usize>;
+impl<const SIDES: usize> Polygon<SIDES> {
+    const fn vertices(self, color: [f32; 3]) -> [Vertex; SIDES] {
+        use trig_const::{cos, sin};
 
-const INDECES: &[u16] = &[
-    0, 1, 4, //
-    1, 2, 4, //
-    2, 3, 4, //
-];
+        let mut out = [Vertex {
+            position: [0.0; 3],
+            color,
+        }; SIDES];
+
+        let angle = std::f32::consts::TAU / SIDES as f32;
+
+        let mut idx = 0;
+        while idx < SIDES {
+            let angle = angle * idx as f32;
+            out[idx].position[0] = sin(angle as _) as _;
+            out[idx].position[1] = cos(angle as _) as _;
+
+            idx += 1;
+        }
+
+        out
+    }
+    const fn index_count() -> usize {
+        (SIDES - 2) * 3
+    }
+
+    const fn indeces_ccw<const OUT: usize>(self) -> [u16; OUT] {
+        assert!(OUT == Self::index_count());
+        let mut out = [0u16; OUT];
+
+        const fn set_tri(out: &mut &mut [u16], a: u16, b: u16, c: u16) {
+            out[0] = a;
+            out[1] = b;
+            out[2] = c;
+
+            #[allow(clippy::mem_replace_with_default)]
+            match mem::replace(out, &mut []) {
+                [out_a, out_b, out_c, rest @ ..] => {
+                    *out_a = a;
+                    *out_b = b;
+                    *out_c = c;
+                    *out = rest;
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        {
+            let mut out = out.as_mut_slice();
+            let mut idx = 2u16;
+            while idx < SIDES as u16 {
+                set_tri(&mut out, idx, idx - 1, 0);
+                idx += 1;
+            }
+        }
+
+        out
+    }
+}
 
 // This will store the state of our game
 pub struct State {
@@ -168,16 +196,19 @@ impl State {
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
+        const SIDES: usize = 10;
+        let polygon = Polygon::<SIDES>;
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(VERTICES),
+            contents: bytemuck::cast_slice(&polygon.vertices([0.5, 0.0, 0.5])),
             usage: BufferUsages::VERTEX,
         });
 
-        let index_count = INDECES.len() as _;
+        let indeces = &polygon.indeces_ccw::<{ Polygon::<SIDES>::index_count() }>();
+        let index_count = indeces.len() as _;
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(INDECES),
+            contents: bytemuck::cast_slice(indeces),
             usage: BufferUsages::INDEX,
         });
 

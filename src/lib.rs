@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::{mem, sync::Arc};
+use wgpu::{BufferUsages, util::DeviceExt};
 use winit::{
     application::ApplicationHandler,
     event::*,
@@ -12,6 +13,49 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use winit::platform::web::EventLoopExtWebSys;
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Vertex {
+    position: [f32; 3],
+    color: [f32; 3],
+}
+
+impl Vertex {
+    const DESC: wgpu::VertexBufferLayout<'static> = {
+        wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<Vertex>() as _,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x3,
+                    shader_location: 0,
+                    offset: mem::offset_of!(Vertex, position) as _,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x3,
+                    shader_location: 1,
+                    offset: mem::offset_of!(Vertex, color) as _,
+                },
+            ],
+        }
+    };
+}
+
+const VERTICES: &[Vertex] = &[
+    Vertex {
+        position: [0.0, 0.5, 0.0],
+        color: [1.0, 0.0, 0.0],
+    },
+    Vertex {
+        position: [-0.5, -0.5, 0.0],
+        color: [0.0, 1.0, 0.0],
+    },
+    Vertex {
+        position: [0.5, -0.5, 0.0],
+        color: [0.0, 0.0, 1.0],
+    },
+];
+
 // This will store the state of our game
 pub struct State {
     surface: wgpu::Surface<'static>,
@@ -21,6 +65,8 @@ pub struct State {
     is_surface_configured: bool,
 
     render_pipeline: wgpu::RenderPipeline,
+    vertex_buffer: wgpu::Buffer,
+    vertex_count: u32,
 
     window: Arc<Window>,
 }
@@ -101,6 +147,13 @@ impl State {
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
+        let vertex_count = VERTICES.len() as u32;
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(VERTICES),
+            usage: BufferUsages::VERTEX,
+        });
+
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
@@ -114,7 +167,7 @@ impl State {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[],
+                buffers: &[Some(Vertex::DESC)],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -152,7 +205,11 @@ impl State {
             queue,
             config,
             is_surface_configured: false,
+
             render_pipeline,
+            vertex_buffer,
+            vertex_count,
+
             window,
         })
     }
@@ -228,7 +285,8 @@ impl State {
                 multiview_mask: None,
             });
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.draw(0..3, 0..1);
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.draw(0..self.vertex_count, 0..1);
         }
 
         // submit will accept anything that implements IntoIter

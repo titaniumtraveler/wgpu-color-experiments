@@ -1,10 +1,10 @@
-use std::{mem, sync::Arc};
-use wgpu::{BufferUsages, util::DeviceExt};
+use std::{f32::consts::TAU, mem, sync::Arc};
+use wgpu::BufferUsages;
 use winit::{
     application::ApplicationHandler,
     event::*,
     event_loop::{ActiveEventLoop, EventLoop},
-    keyboard::{KeyCode, PhysicalKey},
+    keyboard::{Key, KeyCode, NamedKey, PhysicalKey},
     window::Window,
 };
 
@@ -12,6 +12,9 @@ use winit::{
 use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use winit::platform::web::EventLoopExtWebSys;
+
+mod color;
+mod polygon;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -41,67 +44,12 @@ impl Vertex {
     };
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Polygon<const SIDES: usize>;
-impl<const SIDES: usize> Polygon<SIDES> {
-    const fn vertices(self, color: [f32; 3]) -> [Vertex; SIDES] {
-        use trig_const::{cos, sin};
+const SIDES: usize = 100;
+type PolygonConfig = polygon::PolygonConfig<SIDES, { polygon::index_count(SIDES) }>;
+const MAX_POLYGON_CONFIG: PolygonConfig = PolygonConfig::new(SIDES as u16);
 
-        let mut out = [Vertex {
-            position: [0.0; 3],
-            color,
-        }; SIDES];
-
-        let angle = std::f32::consts::TAU / SIDES as f32;
-
-        let mut idx = 0;
-        while idx < SIDES {
-            let angle = angle * idx as f32;
-            out[idx].position[0] = sin(angle as _) as _;
-            out[idx].position[1] = cos(angle as _) as _;
-
-            idx += 1;
-        }
-
-        out
-    }
-    const fn index_count() -> usize {
-        (SIDES - 2) * 3
-    }
-
-    const fn indeces_ccw<const OUT: usize>(self) -> [u16; OUT] {
-        assert!(OUT == Self::index_count());
-        let mut out = [0u16; OUT];
-
-        const fn set_tri(out: &mut &mut [u16], a: u16, b: u16, c: u16) {
-            out[0] = a;
-            out[1] = b;
-            out[2] = c;
-
-            #[allow(clippy::mem_replace_with_default)]
-            match mem::replace(out, &mut []) {
-                [out_a, out_b, out_c, rest @ ..] => {
-                    *out_a = a;
-                    *out_b = b;
-                    *out_c = c;
-                    *out = rest;
-                }
-                _ => unreachable!(),
-            }
-        }
-
-        {
-            let mut out = out.as_mut_slice();
-            let mut idx = 2u16;
-            while idx < SIDES as u16 {
-                set_tri(&mut out, idx, idx - 1, 0);
-                idx += 1;
-            }
-        }
-
-        out
-    }
-}
+const RED: [f32; 3] = color::rgb_to_f32x3(0xFF0F00);
+const MAGENTA: [f32; 3] = color::rgb_to_f32x3(0xBC00BC);
 
 // This will store the state of our game
 pub struct State {
@@ -112,10 +60,13 @@ pub struct State {
     is_surface_configured: bool,
 
     render_pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
+    polygon_config: PolygonConfig,
 
+    vertex_buf: &'static mut [Vertex; MAX_POLYGON_CONFIG.max_corners()],
+    index_buf: &'static mut [u16; MAX_POLYGON_CONFIG.max_indeces()],
+
+    vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
-    index_count: u32,
 
     window: Arc<Window>,
 }
@@ -196,20 +147,27 @@ impl State {
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
-        const SIDES: usize = 10;
-        let polygon = Polygon::<SIDES>;
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let polygon_config = PolygonConfig::new(3);
+
+        let vertex_buf = Box::leak(Box::new(
+            [Vertex {
+                position: [0.; _],
+                color: MAGENTA,
+            }; _],
+        ));
+        let index_buf = Box::leak(Box::new([0; _]));
+        let vertex_buffer = device.create_buffer(&wgpu::wgt::BufferDescriptor {
             label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&polygon.vertices([0.5, 0.0, 0.5])),
-            usage: BufferUsages::VERTEX,
+            size: MAX_POLYGON_CONFIG.vertex_count_bytes(),
+            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
 
-        let indeces = &polygon.indeces_ccw::<{ Polygon::<SIDES>::index_count() }>();
-        let index_count = indeces.len() as _;
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let index_buffer = device.create_buffer(&wgpu::wgt::BufferDescriptor {
             label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(indeces),
-            usage: BufferUsages::INDEX,
+            size: MAX_POLYGON_CONFIG.index_count_bytes(),
+            usage: BufferUsages::INDEX | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
 
         let render_pipeline_layout =
@@ -265,10 +223,13 @@ impl State {
             is_surface_configured: false,
 
             render_pipeline,
-            vertex_buffer,
 
+            vertex_buffer,
             index_buffer,
-            index_count,
+
+            polygon_config,
+            vertex_buf,
+            index_buf,
 
             window,
         })
@@ -322,6 +283,16 @@ impl State {
                 label: Some("Render Encoder"),
             });
 
+        self.polygon_config.write_vertices(self.vertex_buf);
+        self.queue.write_buffer(
+            &self.vertex_buffer,
+            0,
+            bytemuck::cast_slice(self.vertex_buf),
+        );
+        self.polygon_config.write_indeces_ccw(self.index_buf);
+        self.queue
+            .write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(self.index_buf));
+
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
@@ -330,12 +301,7 @@ impl State {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(color::rgb_to_wgpu_color(0x20201d)),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -344,10 +310,19 @@ impl State {
                 timestamp_writes: None,
                 multiview_mask: None,
             });
+
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..self.index_count, 0, 0..1);
+            render_pass.set_vertex_buffer(
+                0,
+                self.vertex_buffer
+                    .slice(..self.polygon_config.vertex_count_bytes()),
+            );
+            render_pass.set_index_buffer(
+                self.index_buffer
+                    .slice(..self.polygon_config.index_count_bytes()),
+                wgpu::IndexFormat::Uint16,
+            );
+            render_pass.draw_indexed(0..self.polygon_config.index_count(), 0, 0..1);
         }
 
         // submit will accept anything that implements IntoIter
@@ -359,9 +334,30 @@ impl State {
 
     fn update(&mut self) {}
 
-    fn handle_key(&self, event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
-        match (code, is_pressed) {
-            (KeyCode::Escape, true) => event_loop.exit(),
+    #[allow(clippy::identity_op)]
+    fn handle_key(&mut self, event_loop: &ActiveEventLoop, key: Key, is_pressed: bool) {
+        match (key.as_ref(), is_pressed) {
+            (Key::Named(NamedKey::Escape), true) => event_loop.exit(),
+            (Key::Named(NamedKey::Space), true) => {
+                let color = &mut self.vertex_buf[0].color;
+                match *color {
+                    RED => *color = MAGENTA,
+                    MAGENTA => *color = RED,
+                    _ => {}
+                }
+            }
+            (Key::Character(c), true) => match c {
+                "0" => self.polygon_config.set_angle(0.),
+                "h" => self.polygon_config.update_angle(0. - 5. / 360. * TAU),
+                "l" => self.polygon_config.update_angle(0. + 5. / 360. * TAU),
+                "k" => self.polygon_config.update_corners_smooth(0 + 1),
+                "j" => self.polygon_config.update_corners_smooth(0 - 1),
+                "K" => self.polygon_config.update_corners(0 + 1),
+                "J" => self.polygon_config.update_corners(0 - 1),
+
+                _ => {}
+            },
+
             _ => {}
         }
     }
@@ -475,12 +471,12 @@ impl ApplicationHandler<State> for App {
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
-                        physical_key: PhysicalKey::Code(code),
+                        logical_key: key,
                         state: key_state,
                         ..
                     },
                 ..
-            } => state.handle_key(event_loop, code, key_state.is_pressed()),
+            } => state.handle_key(event_loop, key, key_state.is_pressed()),
             _ => {}
         }
     }

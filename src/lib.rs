@@ -1,10 +1,10 @@
-use std::{f32::consts::TAU, mem, sync::Arc};
+use std::{cmp, f32::consts::TAU, mem, sync::Arc};
 use wgpu::BufferUsages;
 use winit::{
     application::ApplicationHandler,
     event::*,
     event_loop::{ActiveEventLoop, EventLoop},
-    keyboard::{Key, KeyCode, NamedKey, PhysicalKey},
+    keyboard::{Key, NamedKey},
     window::Window,
 };
 
@@ -12,6 +12,8 @@ use winit::{
 use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use winit::platform::web::EventLoopExtWebSys;
+
+use crate::polygon::CornerUpdateMode;
 
 mod color;
 mod polygon;
@@ -283,6 +285,11 @@ impl State {
                 label: Some("Render Encoder"),
             });
 
+        self.vertex_buf[1].color = match self.vertex_buf[0].color {
+            RED => self.polygon_config.mode_color(),
+            MAGENTA => MAGENTA,
+            _ => unreachable!(),
+        };
         self.polygon_config.write_vertices(self.vertex_buf);
         self.queue.write_buffer(
             &self.vertex_buffer,
@@ -347,13 +354,34 @@ impl State {
                 }
             }
             (Key::Character(c), true) => match c {
+                "+" | "-"
+                    if let CornerUpdateMode::Rotation { rotation } =
+                        self.polygon_config.get_corner_mode_mut() =>
+                {
+                    match c {
+                        "-" => *rotation -= 0.05,
+                        "+" => *rotation += 0.05,
+                        _ => unreachable!(),
+                    }
+                }
+                "+" | "-"
+                    if let CornerUpdateMode::MultiSource { sources } =
+                        self.polygon_config.get_corner_mode_mut() =>
+                {
+                    match c {
+                        "-" => *sources = cmp::max(*sources - 1, 2),
+                        "+" => *sources = cmp::min(*sources + 1, 20),
+                        _ => unreachable!(),
+                    }
+                }
                 "0" => self.polygon_config.set_angle(0.),
                 "h" => self.polygon_config.update_angle(0. - 5. / 360. * TAU),
                 "l" => self.polygon_config.update_angle(0. + 5. / 360. * TAU),
-                "k" => self.polygon_config.update_corners_smooth(0 + 1),
-                "j" => self.polygon_config.update_corners_smooth(0 - 1),
-                "K" => self.polygon_config.update_corners(0 + 1),
-                "J" => self.polygon_config.update_corners(0 - 1),
+
+                "k" => self.polygon_config.update_corners(0 + 1),
+                "j" => self.polygon_config.update_corners(0 - 1),
+
+                "n" => self.polygon_config.update_next_corner_mode(),
 
                 _ => {}
             },

@@ -1,0 +1,4 @@
+#:schema ./assets/trunk-schema.json
+
+[build]
+dist = "target/dist"

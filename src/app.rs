@@ -16,6 +16,11 @@ const SIDES: usize = 100;
 type PolygonConfig = polygon::PolygonConfig<SIDES, { polygon::index_count(SIDES) }>;
 const MAX_POLYGON_CONFIG: PolygonConfig = PolygonConfig::new(SIDES as u16);
 
+enum CurrentTexture {
+    Texture1,
+    Texture2,
+}
+
 // This will store the state of our game
 pub struct State {
     surface: wgpu::Surface<'static>,
@@ -33,8 +38,11 @@ pub struct State {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
 
-    diffuse_bind_group: wgpu::BindGroup,
-    diffuse_texture: crate::texture::Texture,
+    current_texture: CurrentTexture,
+    diffuse_texture_1: crate::texture::Texture,
+    diffuse_texture_2: crate::texture::Texture,
+    diffuse_bind_group_1: wgpu::BindGroup,
+    diffuse_bind_group_2: wgpu::BindGroup,
 
     window: Arc<Window>,
 }
@@ -110,15 +118,25 @@ impl State {
             color_space: wgpu::SurfaceColorSpace::Auto,
         };
 
-        let diffuse_bytes = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/images/happy-little-tree.png"
-        ));
-        let diffuse_texture = crate::texture::Texture::from_bytes(
+        let current_texture = CurrentTexture::Texture1;
+        let diffuse_texture_1 = crate::texture::Texture::from_bytes(
             &device,
             &queue,
-            diffuse_bytes,
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/assets/images/happy-little-tree.png"
+            )),
             "happy-little-tree",
+        )
+        .unwrap();
+        let diffuse_texture_2 = crate::texture::Texture::from_bytes(
+            &device,
+            &queue,
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/assets/images/happy-little-tree-inverted.png"
+            )),
+            "happy-little-tree-inverted",
         )
         .unwrap();
 
@@ -144,17 +162,31 @@ impl State {
                     },
                 ],
             });
-        let diffuse_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("texture_bind_group"),
+        let diffuse_bind_group_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("texture_bind_group_1"),
             layout: &diffuse_bind_group_layout,
             entries: &[
                 BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
+                    resource: wgpu::BindingResource::TextureView(&diffuse_texture_1.view),
                 },
                 BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
+                    resource: wgpu::BindingResource::Sampler(&diffuse_texture_1.sampler),
+                },
+            ],
+        });
+        let diffuse_bind_group_2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("texture_bind_group_2"),
+            layout: &diffuse_bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&diffuse_texture_2.view),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&diffuse_texture_2.sampler),
                 },
             ],
         });
@@ -248,8 +280,11 @@ impl State {
             vertex_buf,
             index_buf,
 
-            diffuse_texture,
-            diffuse_bind_group,
+            current_texture,
+            diffuse_texture_1,
+            diffuse_texture_2,
+            diffuse_bind_group_1,
+            diffuse_bind_group_2,
 
             window,
         })
@@ -332,7 +367,14 @@ impl State {
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(0, Some(&self.diffuse_bind_group), &[]);
+            render_pass.set_bind_group(
+                0,
+                Some(match self.current_texture {
+                    CurrentTexture::Texture1 => &self.diffuse_bind_group_1,
+                    CurrentTexture::Texture2 => &self.diffuse_bind_group_2,
+                }),
+                &[],
+            );
             render_pass.set_vertex_buffer(
                 0,
                 self.vertex_buffer
@@ -359,6 +401,12 @@ impl State {
     fn handle_key(&mut self, event_loop: &ActiveEventLoop, key: Key, is_pressed: bool) {
         match (key.as_ref(), is_pressed) {
             (Key::Named(NamedKey::Escape), true) => event_loop.exit(),
+            (Key::Named(NamedKey::Space), true) => {
+                self.current_texture = match self.current_texture {
+                    CurrentTexture::Texture1 => CurrentTexture::Texture2,
+                    CurrentTexture::Texture2 => CurrentTexture::Texture1,
+                }
+            }
             (Key::Character(c), true) => match c {
                 "+" | "-"
                     if let CornerUpdateMode::Rotation { rotation } =

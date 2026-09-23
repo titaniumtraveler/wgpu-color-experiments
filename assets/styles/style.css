@@ -8,9 +8,8 @@ body {
 }
 
 canvas {
-  background-color: #20201d;
-  width: 50vw;
-  height: 50vw;
+  width: 100vw;
+  height: 100vw;
 
   &:focus {
     outline: none;

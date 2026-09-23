@@ -15,7 +15,7 @@ mod polygon;
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
     position: [f32; 3],
-    color: [f32; 3],
+    tex_coordinates: [f32; 2],
 }
 
 impl Vertex {
@@ -30,9 +30,9 @@ impl Vertex {
                     offset: mem::offset_of!(Vertex, position) as _,
                 },
                 wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x3,
+                    format: wgpu::VertexFormat::Float32x2,
                     shader_location: 1,
-                    offset: mem::offset_of!(Vertex, color) as _,
+                    offset: mem::offset_of!(Vertex, tex_coordinates) as _,
                 },
             ],
         }

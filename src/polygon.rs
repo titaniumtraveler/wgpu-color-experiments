@@ -7,8 +7,6 @@ use std::{cmp::Ordering, mem};
 // using TAU because 2PI *probably* has one bit less precision
 use std::f32::consts::{PI, TAU};
 
-use super::color;
-
 #[derive(Debug, Clone)]
 pub struct PolygonConfig<const MAX_CORNERS: usize, const MAX_INDECES: usize> {
     corners: u16,
@@ -45,16 +43,12 @@ impl<const MAX_CORNERS: usize, const MAX_INDECES: usize> PolygonConfig<MAX_CORNE
         MAX_INDECES
     }
 
-    pub fn mode_color(&self) -> [f32; 3] {
-        match self.corner_update_mode {
-            CornerUpdateMode::Raw => color::rgb_to_f32x3(0xCCCCCC),
-            CornerUpdateMode::Rotation { .. } => color::rgb_to_f32x3(0x0000FF),
-            CornerUpdateMode::MultiSource { .. } => color::rgb_to_f32x3(0xFFFF00),
-        }
-    }
-
     pub const fn vertex_count_bytes(&self) -> u64 {
         (self.corners as usize * mem::size_of::<Vertex>()) as _
+    }
+    #[allow(dead_code)]
+    pub fn vertex_count(&self) -> usize {
+        self.corners as usize
     }
     pub const fn write_vertices(&self, vertices: &mut [Vertex; MAX_CORNERS]) {
         use trig_const::{cos, sin};
@@ -62,9 +56,18 @@ impl<const MAX_CORNERS: usize, const MAX_INDECES: usize> PolygonConfig<MAX_CORNE
         let mut idx = 0;
         while idx < self.corners {
             let angle = self.angle_size() * idx as f32 + self.angle_offset;
-            let pos = &mut vertices[idx as usize].position;
+            let Vertex {
+                position: pos,
+                tex_coordinates: tex,
+            } = &mut vertices[idx as usize];
             pos[0] = sin(angle as _) as _;
             pos[1] = cos(angle as _) as _;
+
+            // remap from -1..=1 to 1..=0
+            // Doesn't include `self.angle_offset` to rotate in-sync with the polygon
+            let angle = self.angle_size() * idx as f32;
+            tex[0] = (-sin(angle as _) as f32 + 1.) / 2.;
+            tex[1] = (-cos(angle as _) as f32 + 1.) / 2.;
 
             idx += 1;
         }

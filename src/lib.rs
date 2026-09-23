@@ -10,6 +10,7 @@ use winit::platform::web::EventLoopExtWebSys;
 mod app;
 mod color;
 mod polygon;
+mod texture;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
